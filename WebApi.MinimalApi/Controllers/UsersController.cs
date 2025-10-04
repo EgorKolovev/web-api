@@ -4,6 +4,7 @@ using System.Linq;
 using AutoMapper;
 using Microsoft.AspNetCore.JsonPatch;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.AspNetCore.Routing;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Serialization;
@@ -42,7 +43,7 @@ public class UsersController : Controller
     {
         var userResult = TryGetExistingUser(userId, NotFound, out var userEntity, out var errorResult);
         if (!userResult)
-            return errorResult!;
+            return (ActionResult)errorResult!;
 
         var userDto = mapper.Map<UserDto>(userEntity);
         return Ok(userDto);
@@ -52,12 +53,11 @@ public class UsersController : Controller
     [Produces("application/json", "application/xml")]
     public IActionResult HeadUserById([FromRoute] string userId)
     {
-        var userResult = TryGetExistingUser(userId, NotFound, out var userEntity, out var errorResult);
-        if (!userResult)
+        var ok = TryGetExistingUser(userId, NotFound, out var _, out var errorResult);
+        if (!ok)
             return errorResult!;
-
-        var userDto = mapper.Map<UserDto>(userEntity);
-        return Ok(userDto);
+        
+        return Content(string.Empty, "application/json; charset=utf-8");
     }
 
     [HttpGet(Name = nameof(GetUsers))]
@@ -125,14 +125,19 @@ public class UsersController : Controller
 
     [HttpPatch("{userId}")]
     [Produces("application/json", "application/xml")]
-    public IActionResult PartiallyUpdateUser([FromRoute] string userId, [FromBody] JsonPatchDocument<UpdateUserDto>? patchDoc)
+    public IActionResult PartiallyUpdateUser(
+        [FromRoute] string userId,
+        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)]
+        JsonPatchDocument<UpdateUserDto>? patchDoc)
     {
+        // 1) Пустое тело -> 400 (тест этого и ждёт)
+        if (patchDoc is null)
+            return BadRequest();
+
+        // 2) Теперь ищем пользователя
         var userResult = TryGetExistingUser(userId, NotFound, out var existingUser, out var errorResult);
         if (!userResult)
             return errorResult!;
-
-        if (patchDoc is null)
-            return BadRequest();
 
         var userToPatch = mapper.Map<UpdateUserDto>(existingUser);
         patchDoc.ApplyTo(userToPatch, ModelState);
@@ -143,14 +148,12 @@ public class UsersController : Controller
         if (!TryValidateModel(userToPatch))
             return UnprocessableEntity(ModelState);
 
-        if (!ModelState.IsValid)
-            return UnprocessableEntity(ModelState);
-
         mapper.Map(userToPatch, existingUser);
         userRepository.Update(existingUser);
 
         return NoContent();
     }
+
 
     [HttpDelete("{userId}")]
     public IActionResult DeleteUser([FromRoute] string userId)
